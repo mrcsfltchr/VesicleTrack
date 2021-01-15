@@ -320,6 +320,32 @@ class FluorescenceExtractor(object):
         
         return np.mean(internal_signal)
     
+    def normalise_trace(self,trace):
+        
+        # normalise Intensity time series w.r.t its initial value
+        
+        return trace/trace[0]
+    
+    def normalise_all_traces(self):
+        
+        # for all time traces, unpack the Intensity time series, normalise it and return to database
+        
+        
+        for key in self.vesicle_Is.keys():
+            
+            vesicle_data = self.vesicle_Is[key]
+            
+            t = vesicle_data[:,0]
+            
+            I = vesicle_data[:,1]
+            
+            I = self.normalise_trace(I)
+            
+            vesicle_data[:,1] = I
+            
+            self.vesicle_Is[key] = vesicle_data
+            
+            
    
 # Example use
 
