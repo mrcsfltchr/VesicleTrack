@@ -17,6 +17,8 @@ from trapanalysis import TrapGetter
 from MemDetect.MemFret import load_tif
 from matplotlib import pyplot as plt
 from skimage.draw import circle
+from skimage.filters import gaussian
+from scipy.optimize import curve_fit
 
 class VesicleTracker(TrapGetter):
     
@@ -71,7 +73,7 @@ class VesicleTracker(TrapGetter):
                 txy = np.concatenate((np.array([t]),new_position))
 
                 
-                print('txy: ',txy)
+                #print('txy: ',txy)
                 self.vesicle_trajectories[key] = np.vstack((self.vesicle_trajectories[key],txy))
             
         self.deactivate_trajectories(keys_to_delete)
@@ -229,7 +231,7 @@ class VesicleTracker(TrapGetter):
             
             self.label_positions[key] = np.array([mean_position_1, mean_position_2])
             
-    def remove_small_traces(self,min_trace = 50):
+    def remove_small_traces(self,min_trace = 500):
         
 
         # remove traces from ceased_vesicle_trajectories which are below a min_threshold
@@ -278,7 +280,7 @@ class VesicleTracker(TrapGetter):
        
 class FluorescenceExtractor(object):
     
-    def __init__(self,radius,exp_vid):
+    def __init__(self,radius,exp_vid,sigma = 12):
         
         self.radius = radius # radius of disk to average intensity over
         
@@ -286,9 +288,10 @@ class FluorescenceExtractor(object):
         
         self.vesicle_Is = {} # record of intensity time traces by vesicle
         
+        self.sigma = sigma # gaussian convolution smoothing parameter
         
         
-    def generate_time_series(self,vesicle_positions):
+    def generate_time_series(self,vesicle_positions,bg_sub = True,smooth = True):
         
         # vesicle positions should be the dictionary, vesicle_trajectories, from the VesicleTracker object
         # regardless it should have the formate {label: np.array([[t_i,x_i,y_i],[t_i+1,x_i+1,y_i+1],...), label2: ...}
@@ -303,7 +306,7 @@ class FluorescenceExtractor(object):
                 t = timed_position[0]
                 position = timed_position[1:]
                 
-                I_t = self.get_mean_I(position,t)
+                I_t = self.get_mean_I(position,t,bg_sub,smooth)
                 
                 I.append([t,I_t])
                 
@@ -311,14 +314,38 @@ class FluorescenceExtractor(object):
                 
             self.vesicle_Is[key] = I
             
-    def get_mean_I(self,vesicle_position, t):
+    def get_mean_I(self,vesicle_position, t, bg_sub = True,smooth = True):
+        #t is entered as a time in seconds rather than a frame number
+        
+        
         
         ROI = circle(vesicle_position[0],vesicle_position[1],self.radius)
         
-        print(ROI)
-        internal_signal = self.exp_vid[t][ROI]
+        #ROI is a tuple of numpy arrays corresponding to coordinates internal to a circle. want them both to be within bounds of x and y limit
+        x = ROI[0][ROI[1] < 512]
+        y = ROI[1][ROI[1] < 512]
+        
+        y = y[x < 512]
+        x = x[x < 512]
+        
+        if smooth:
+            frame = self.smooth_image(self.exp_vid[t],self.sigma)
+        
+        else:
+            frame = self.exp_vid[t]
+        
+            
+        if bg_sub:
+            internal_signal = frame[x,y] - self.median_background(t)
+        
+        else:
+            internal_signal = frame[x,y]
         
         return np.mean(internal_signal)
+    
+    def smooth_image(self, image,sigma):
+        
+        return gaussian(image,sigma,preserve_range = True)
     
     def normalise_trace(self,trace):
         
@@ -345,8 +372,51 @@ class FluorescenceExtractor(object):
             
             self.vesicle_Is[key] = vesicle_data
             
+    def exponential_fit(self,params0):
+    
+        #params[0]: list with two entries, k and c: model params for linear fit to log transformation of exponential data.
+        
+        
+        def linear(t,k,c):
+
+            return -k*t +c
+        self.fits = {}
+
+        for key in self.vesicle_Is.keys():
+
+            data = self.vesicle_Is[key]
+
+            t = data[:,0]
+
+
+            t0 = t[0] # starting frame
+            t = t-t0
+            I = data[:,1]
+
+            log_I = np.log(I)
+
+
+
+            params = curve_fit(linear,t,log_I,p0 = params[0])
+
+
+            self.fits[key] = params
+
+    def median_background(self,t):
+        
+        return np.median(self.exp_vid[t])
+    
+    def remove_traces(self,list_of_keys):
+        
+        # remove a specified list of traces. This is usually done after the user notices a bad trace in the plot
+        
+        for key in list_of_keys:
             
-   
+            if key in self.vesicle_Is.keys():
+                self.vesicle_Is.pop(key)
+                             
+            else:
+                print(str(key) + ' is not in the database')
 # Example use
 
 if __name__ == '__main__':
